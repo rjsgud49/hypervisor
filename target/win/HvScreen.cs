@@ -129,7 +129,8 @@ namespace HvScreen
                     scaled = new Bitmap(maxWidth, height, PixelFormat.Format24bppRgb);
                     using (Graphics g = Graphics.FromImage(scaled))
                     {
-                        g.InterpolationMode = InterpolationMode.Bilinear;
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                         g.DrawImage(raw, 0, 0, maxWidth, height);
                     }
                     frame = scaled;
@@ -856,7 +857,7 @@ namespace HvScreen
                 byte[] jpeg = null;
                 try
                 {
-                    jpeg = Wire.CaptureJpeg(55L, 1280);
+                    jpeg = Wire.CaptureJpeg(80L, 1920);
                 }
                 catch (Exception ex)
                 {
