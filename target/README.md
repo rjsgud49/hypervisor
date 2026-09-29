@@ -76,15 +76,16 @@ Main 게스트 프레임버퍼를 직접 슬롯에 넣을 때는 게스트 안�
 
 ## Windows 화면
 
-Type-1 게스트 화면과 별개로, 이 PC(Windows) 바탕화면을 다루는 경로가 둘 있다.
+신버전은 `win/hvshare`다. 구버전은 `win/HvShare.exe`, `win/HvView.exe`다. 중계 서버는 구버전 프로그램을 그대로 쓰되, 웹 페이지로 화면을 보여 주지 않는다.
 
-| 파일 | 역할 |
-|------|------|
-| `win/HvShare.exe` | 바탕화면을 JPEG로 `http://monitor.rjsgud.com:19723/frame`에 보낸다. 창 제목은 **HV 화면 보내기** |
-| `win/HvView.exe` | 감시 주소를 브라우저로 연다. 창 제목은 **HV 화면 보기** |
-| `win/hvshare/HvShare.sys` | 커널 드라이버. 바탕화면 프레임을 드라이버 메모리에 둔다 |
-| `win/hvshare/HvShareView.exe` | 관리자로 실행. 바탕화면을 드라이버에 넣고, 드라이버가 돌려준 프레임을 **HV 화면** 창에 그린다 |
+| 파일 | 구분 | 역할 |
+|------|------|------|
+| `win/HvRelay.exe` | 서버 | 19723 포트. 화면을 받아 둔다. 창 제목은 **HV 중계 서버** |
+| `win/hvshare/HvShare.exe` | 신버전 | `HvShare.sys`를 등록하고, 드라이버가 가진 프레임을 서버로 보낸다 |
+| `win/hvshare/HvShareView.exe` | 신버전 | 서버에 올라온 화면을 창에 그린다. 웹 브라우저가 아니다 |
+| `win/HvShare.exe` | 구버전 | 드라이버 없이 이 PC 화면을 서버로 보낸다 |
+| `win/HvView.exe` | 구버전 | 브라우저로 보던 창. 지금은 신버전 `HvShareView`를 쓰라고 안내한다 |
 
-`HvShare.sys`는 프로세스 목록에 나오지 않는다. 서비스 이름은 `HvShare`, 종류는 `KERNEL_DRIVER`, 장치 경로는 `\\.\HvShare`다. 소스와 프로젝트는 `win/hvshare/driver`, `win/hvshare/include`, `win/hvshare/user`에 있다.
+보는 순서는 서버 → 신버전 `HvShare` → 신버전 `HvShareView`다.
 
-픽셀은 사용자 모드 `CopyFromScreen`으로 들어오고, 프레임을 보관하는 주체는 드라이버다. 다른 게스트의 RAM을 열지 않고, GPU 스캔아웃을 긁지 않는다. 드라이버는 테스트 서명이며, 테스트 서명이 켜져 있어야 서비스가 시작된다.
+`HvShare.sys`는 프로세스 목록에 나오지 않는다. 서비스 이름은 `HvShare`, 장치 경로는 `\\.\HvShare`다. 픽셀은 사용자 모드 `CopyFromScreen`으로 들어오고, 프레임을 보관하는 주체는 드라이버다. 서버로 나가는 것은 그 프레임을 사용자 모드에서 읽은 JPEG다. 다른 게스트의 RAM을 열지 않고, GPU 스캔아웃을 긁지 않는다. 드라이버는 테스트 서명이며, 테스트 서명이 켜져 있어야 신버전 `HvShare`가 서비스를 시작한다.

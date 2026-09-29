@@ -2,7 +2,9 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Net;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -15,7 +17,7 @@ namespace HvShare
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new VgaForm());
+            Application.Run(new SenderForm());
         }
     }
 
@@ -369,120 +371,71 @@ namespace HvShare
         }
     }
 
-    sealed class VgaForm : Form
+    sealed class SenderForm : Form
     {
         readonly Label _status;
-        readonly Button _retry;
-        readonly object _gate = new object();
-        Bitmap _frame;
-        int _frames;
+        readonly string _senderName;
+        readonly string _senderId;
         volatile bool _running;
         Thread _capture;
+        bool _hubOk;
+        const string HubUrl = "http://monitor.rjsgud.com:19723";
 
-        static readonly Color Bg = Color.FromArgb(14, 17, 22);
-        static readonly Color Panel = Color.FromArgb(23, 27, 34);
-        static readonly Color Fg = Color.FromArgb(231, 237, 245);
-        static readonly Color Muted = Color.FromArgb(147, 160, 180);
-        static readonly Color Accent = Color.FromArgb(61, 126, 238);
-        static readonly Color[] Ega = new Color[]
+        public SenderForm()
         {
-            Color.FromArgb(0, 0, 0), Color.FromArgb(0, 0, 170), Color.FromArgb(0, 170, 0), Color.FromArgb(0, 170, 170),
-            Color.FromArgb(170, 0, 0), Color.FromArgb(170, 0, 170), Color.FromArgb(170, 85, 0), Color.FromArgb(170, 170, 170),
-            Color.FromArgb(85, 85, 85), Color.FromArgb(85, 85, 255), Color.FromArgb(85, 255, 85), Color.FromArgb(85, 255, 255),
-            Color.FromArgb(255, 85, 85), Color.FromArgb(255, 85, 255), Color.FromArgb(255, 255, 85), Color.FromArgb(255, 255, 255)
-        };
+            _senderName = Environment.MachineName;
+            _senderId = CleanToken(_senderName);
+            if (_senderId.Length == 0)
+                _senderId = "pc";
+            _senderId = _senderId + "-" + new Random().Next(0x1000, 0xFFFF).ToString("X");
 
-        public VgaForm()
-        {
-            Text = "HV 화면";
-            BackColor = Bg;
-            ForeColor = Fg;
-            ClientSize = new Size(1100, 700);
-            MinimumSize = new Size(720, 480);
+            Text = "HvShare 신버전";
             StartPosition = FormStartPosition.CenterScreen;
-            DoubleBuffered = true;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            BackColor = Color.FromArgb(14, 17, 22);
+            ForeColor = Color.FromArgb(231, 237, 245);
+            ClientSize = new Size(560, 220);
             Font = new Font("Segoe UI", 10f);
-            KeyPreview = true;
-            KeyDown += delegate (object sender, KeyEventArgs e)
-            {
-                if (e.KeyCode == Keys.Escape)
-                    Close();
-            };
 
-            Panel bar = new Panel();
-            bar.Dock = DockStyle.Top;
-            bar.Height = 64;
-            bar.BackColor = Panel;
-            Controls.Add(bar);
+            Label lead = new Label();
+            lead.Text = "HvShare.sys에 이 PC 화면을 넣고, 중계 서버로 보냅니다.\r\n화면은 HvShareView에서 봅니다.";
+            lead.ForeColor = Color.FromArgb(147, 160, 180);
+            lead.Bounds = new Rectangle(24, 16, 512, 48);
+            Controls.Add(lead);
 
             _status = new Label();
-            _status.Text = "드라이버를 여는 중";
-            _status.ForeColor = Muted;
-            _status.Bounds = new Rectangle(16, 8, 860, 48);
-            bar.Controls.Add(_status);
+            _status.Text = "드라이버를 등록하는 중";
+            _status.ForeColor = Color.FromArgb(231, 237, 245);
+            _status.Bounds = new Rectangle(24, 80, 512, 110);
+            Controls.Add(_status);
 
-            _retry = new Button();
-            _retry.Text = "다시 연결";
-            _retry.Bounds = new Rectangle(980, 16, 100, 32);
-            _retry.FlatStyle = FlatStyle.Flat;
-            _retry.BackColor = Accent;
-            _retry.ForeColor = Color.White;
-            _retry.FlatAppearance.BorderSize = 0;
-            _retry.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _retry.Click += delegate { Connect(); };
-            bar.Controls.Add(_retry);
-
-            Shown += delegate { Connect(); };
+            Shown += delegate { StartSend(); };
             FormClosing += delegate
             {
-                StopCapture();
+                _running = false;
                 Driver.Close();
             };
         }
 
-        void SetStatus(string text)
+        void StartSend()
         {
-            if (IsDisposed)
-                return;
-            if (InvokeRequired)
-            {
-                try
-                {
-                    BeginInvoke((MethodInvoker)delegate { SetStatus(text); });
-                }
-                catch (Exception)
-                {
-                }
-                return;
-            }
-            _status.Text = text;
-        }
-
-        void Connect()
-        {
-            StopCapture();
-            Driver.Close();
             string error;
             Driver.Open(out error);
             if (error.Length != 0)
             {
-                SetStatus(error);
-                Invalidate();
+                _status.Text = error;
                 return;
             }
             _running = true;
-            _capture = new Thread(CaptureLoop);
+            _capture = new Thread(SendLoop);
             _capture.IsBackground = true;
             _capture.Start();
         }
 
-        void StopCapture()
+        void SendLoop()
         {
-            _running = false;
-        }
-
-        void CaptureLoop()
-        {
+            int frames = 0;
             while (_running && Driver.Handle != Driver.Invalid())
             {
                 string error;
@@ -496,7 +449,7 @@ namespace HvShare
                 if (shot == null)
                 {
                     SetStatus(error);
-                    Thread.Sleep(100);
+                    Thread.Sleep(200);
                     continue;
                 }
                 bool published = Driver.Publish(shot, out error);
@@ -504,47 +457,127 @@ namespace HvShare
                 if (!published)
                 {
                     SetStatus(error);
-                    Thread.Sleep(100);
+                    Thread.Sleep(200);
                     continue;
                 }
                 VgaInfo info;
                 if (!Driver.Query(out info, out error) || info.Source != Ioctl.SourceDesktop)
                 {
                     SetStatus(error.Length != 0 ? error : "드라이버가 바탕화면 프레임을 들고 있지 않습니다.");
-                    Thread.Sleep(100);
+                    Thread.Sleep(200);
                     continue;
                 }
                 byte[] payload = Driver.Read(info, out error);
                 if (payload == null)
                 {
                     SetStatus(error);
-                    Thread.Sleep(100);
+                    Thread.Sleep(200);
                     continue;
                 }
-                Bitmap shown = BuildBgra(info, payload);
-                if (shown == null)
+                byte[] jpeg = EncodeJpeg(info, payload);
+                if (jpeg != null)
+                    PostHub(jpeg);
+                frames++;
+                string link = _hubOk ? "서버로 보내는 중" : "서버 연결 대기";
+                SetStatus("드라이버 프레임 " + info.Width.ToString() + "×" + info.Height.ToString()
+                    + "\r\n" + link + "   프레임 " + frames.ToString()
+                    + "\r\n" + HubUrl);
+                Thread.Sleep(100);
+            }
+        }
+
+        void PostHub(byte[] jpeg)
+        {
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(HubUrl + "/frame");
+                req.Method = "POST";
+                req.ContentType = "image/jpeg";
+                req.Headers.Add("X-Hv-Id", _senderId);
+                req.Headers.Add("X-Hv-Name", _senderName);
+                req.Timeout = 2500;
+                req.ReadWriteTimeout = 2500;
+                req.ServicePoint.Expect100Continue = false;
+                req.ContentLength = jpeg.Length;
+                using (Stream stream = req.GetRequestStream())
+                    stream.Write(jpeg, 0, jpeg.Length);
+                using (WebResponse response = req.GetResponse())
                 {
-                    SetStatus("드라이버 프레임을 그릴 수 없습니다.");
-                    Thread.Sleep(100);
-                    continue;
                 }
-                lock (_gate)
-                {
-                    Bitmap old = _frame;
-                    _frame = shown;
-                    if (old != null)
-                        old.Dispose();
-                }
-                _frames++;
-                SetStatus("드라이버 프레임   " + info.Width.ToString() + "×" + info.Height.ToString() + "   프레임 " + _frames.ToString());
+                _hubOk = true;
+            }
+            catch (Exception)
+            {
+                _hubOk = false;
+            }
+        }
+
+        static byte[] EncodeJpeg(VgaInfo info, byte[] payload)
+        {
+            int width = (int)info.Width;
+            int height = (int)info.Height;
+            int pitch = (int)info.Pitch;
+            if (width <= 0 || height <= 0 || pitch < width * 4 || payload.Length < pitch * height)
+                return null;
+            int outW = width > 1920 ? 1920 : width;
+            int outH = width > 1920 ? Math.Max(1, height * 1920 / width) : height;
+            Bitmap bmp = new Bitmap(outW, outH, PixelFormat.Format24bppRgb);
+            try
+            {
+                BitmapData bits = bmp.LockBits(new Rectangle(0, 0, outW, outH), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
                 try
                 {
-                    BeginInvoke((MethodInvoker)delegate { Invalidate(); });
+                    for (int y = 0; y < outH; y++)
+                    {
+                        int srcY = width > 1920 ? y * height / outH : y;
+                        int row = srcY * pitch;
+                        byte[] line = new byte[outW * 3];
+                        for (int x = 0; x < outW; x++)
+                        {
+                            int srcX = width > 1920 ? x * width / outW : x;
+                            int p = row + srcX * 4;
+                            line[x * 3 + 0] = payload[p + 0];
+                            line[x * 3 + 1] = payload[p + 1];
+                            line[x * 3 + 2] = payload[p + 2];
+                        }
+                        Marshal.Copy(line, 0, IntPtr.Add(bits.Scan0, y * bits.Stride), line.Length);
+                    }
                 }
-                catch (Exception)
+                finally
                 {
+                    bmp.UnlockBits(bits);
                 }
-                Thread.Sleep(100);
+                ImageCodecInfo codec = null;
+                ImageCodecInfo[] codecs = ImageCodecInfo.GetImageEncoders();
+                for (int i = 0; i < codecs.Length; i++)
+                {
+                    if (codecs[i].MimeType == "image/jpeg")
+                    {
+                        codec = codecs[i];
+                        break;
+                    }
+                }
+                if (codec == null)
+                    return null;
+                using (EncoderParameters ep = new EncoderParameters(1))
+                {
+                    ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 80L);
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        bmp.Save(ms, codec, ep);
+                        if (ms.Length <= 0 || ms.Length > 8 * 1024 * 1024)
+                            return null;
+                        return ms.ToArray();
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+            finally
+            {
+                bmp.Dispose();
             }
         }
 
@@ -566,154 +599,37 @@ namespace HvShare
             }
         }
 
-        static string Describe(VgaInfo info, int frames)
+        static string CleanToken(string raw)
         {
-            string kind;
-            if (info.Source == Ioctl.SourceDesktop)
-                kind = "드라이버 프레임";
-            else if (info.Source == Ioctl.SourceLfb)
-                kind = "QEMU VGA 선형 프레임버퍼";
-            else if (info.Source == Ioctl.SourceText)
-                kind = "VGA 텍스트 메모리 0xB8000";
-            else
-                kind = "레거시 VGA 0xA0000. 최신 Windows 바탕화면은 이 창에 없습니다";
-            return kind + "   " + info.Width.ToString() + "×" + info.Height.ToString()
-                + "   0x" + info.PhysBase.ToString("X")
-                + "   프레임 " + frames.ToString();
-        }
-
-        static Bitmap Build(VgaInfo info, byte[] payload)
-        {
-            if (info.Format == Ioctl.FormatIndex8)
-                return BuildIndex(info, payload);
-            if (info.Format == Ioctl.FormatBgra32)
-                return BuildBgra(info, payload);
-            if (info.Format == Ioctl.FormatText)
-                return BuildText(info, payload);
-            return null;
-        }
-
-        static Bitmap BuildIndex(VgaInfo info, byte[] payload)
-        {
-            int width = (int)info.Width;
-            int height = (int)info.Height;
-            int shift = info.PaletteScale == 2 ? 2 : 0;
-            if (payload.Length < width * height)
-                return null;
-            Bitmap bmp = new Bitmap(width, height, PixelFormat.Format32bppRgb);
-            BitmapData bits = bmp.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
-            byte[] row = new byte[width * 4];
-            for (int y = 0; y < height; y++)
+            if (raw == null)
+                return "";
+            StringBuilder acc = new StringBuilder();
+            for (int i = 0; i < raw.Length && acc.Length < 40; i++)
             {
-                for (int x = 0; x < width; x++)
-                {
-                    int p = payload[y * width + x];
-                    int o = p * 3;
-                    row[x * 4 + 0] = Scale(info.Palette[o + 2], shift);
-                    row[x * 4 + 1] = Scale(info.Palette[o + 1], shift);
-                    row[x * 4 + 2] = Scale(info.Palette[o + 0], shift);
-                    row[x * 4 + 3] = 255;
-                }
-                Marshal.Copy(row, 0, IntPtr.Add(bits.Scan0, y * bits.Stride), width * 4);
+                char c = raw[i];
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+                if (ok)
+                    acc.Append(c);
             }
-            bmp.UnlockBits(bits);
-            return bmp;
+            return acc.ToString();
         }
 
-        static byte Scale(byte value, int shift)
+        void SetStatus(string text)
         {
-            int n = value << shift;
-            if (n > 255)
-                n = 255;
-            return (byte)n;
-        }
-
-        static Bitmap BuildBgra(VgaInfo info, byte[] payload)
-        {
-            int width = (int)info.Width;
-            int height = (int)info.Height;
-            int pitch = (int)info.Pitch;
-            if (pitch < width * 4 || payload.Length < pitch * height)
-                return null;
-            Bitmap bmp = new Bitmap(width, height, PixelFormat.Format32bppRgb);
-            BitmapData bits = bmp.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
-            for (int y = 0; y < height; y++)
-                Marshal.Copy(payload, y * pitch, IntPtr.Add(bits.Scan0, y * bits.Stride), width * 4);
-            bmp.UnlockBits(bits);
-            return bmp;
-        }
-
-        static Bitmap BuildText(VgaInfo info, byte[] payload)
-        {
-            int cols = (int)info.Width;
-            int rows = (int)info.Height;
-            if (payload.Length < cols * rows * 2)
-                return null;
-            int cw = 9;
-            int ch = 16;
-            Bitmap bmp = new Bitmap(Math.Max(1, cols * cw), Math.Max(1, rows * ch), PixelFormat.Format24bppRgb);
-            SolidBrush[] ink = new SolidBrush[16];
-            SolidBrush[] back = new SolidBrush[8];
-            for (int i = 0; i < 16; i++)
-                ink[i] = new SolidBrush(Ega[i]);
-            for (int i = 0; i < 8; i++)
-                back[i] = new SolidBrush(Ega[i]);
-            using (Graphics g = Graphics.FromImage(bmp))
-            using (Font font = new Font("Consolas", 11f, FontStyle.Regular, GraphicsUnit.Pixel))
-            {
-                g.Clear(Color.Black);
-                for (int y = 0; y < rows; y++)
-                {
-                    for (int x = 0; x < cols; x++)
-                    {
-                        int i = (y * cols + x) * 2;
-                        char glyph = (char)payload[i];
-                        if (glyph < 32 || glyph > 126)
-                            glyph = ' ';
-                        int attr = payload[i + 1];
-                        Rectangle cell = new Rectangle(x * cw, y * ch, cw, ch);
-                        g.FillRectangle(back[(attr >> 4) & 7], cell);
-                        g.DrawString(glyph.ToString(), font, ink[attr & 0x0F], cell.X, cell.Y - 1);
-                    }
-                }
-            }
-            for (int i = 0; i < 16; i++)
-                ink[i].Dispose();
-            for (int i = 0; i < 8; i++)
-                back[i].Dispose();
-            return bmp;
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Rectangle client = ClientRectangle;
-            client.Y += 64;
-            client.Height -= 64;
-            e.Graphics.Clear(Bg);
-            Rectangle outer = new Rectangle(24, client.Y + 16, client.Width - 48, client.Height - 32);
-            if (outer.Width < 80 || outer.Height < 80)
+            if (IsDisposed)
                 return;
-            using (SolidBrush bezel = new SolidBrush(Color.FromArgb(10, 12, 16)))
-                e.Graphics.FillRectangle(bezel, outer);
-            int pad = 14;
-            Rectangle screen = new Rectangle(outer.X + pad, outer.Y + pad, outer.Width - pad * 2, outer.Height - pad * 2);
-            lock (_gate)
+            if (InvokeRequired)
             {
-                if (_frame == null)
+                try
                 {
-                    TextRenderer.DrawText(e.Graphics, "화면 대기", Font, screen, Muted,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                    return;
+                    BeginInvoke((MethodInvoker)delegate { SetStatus(text); });
                 }
-                float scale = Math.Min((float)screen.Width / _frame.Width, (float)screen.Height / _frame.Height);
-                int dw = Math.Max(1, (int)(_frame.Width * scale));
-                int dh = Math.Max(1, (int)(_frame.Height * scale));
-                int dx = screen.X + (screen.Width - dw) / 2;
-                int dy = screen.Y + (screen.Height - dh) / 2;
-                e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
-                e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                e.Graphics.DrawImage(_frame, new Rectangle(dx, dy, dw, dh));
+                catch (Exception)
+                {
+                }
+                return;
             }
+            _status.Text = text;
         }
     }
 }

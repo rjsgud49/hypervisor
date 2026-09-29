@@ -366,18 +366,10 @@ namespace HvScreen
                     WriteResponse(stream, 404, "Not Found", "text/plain", hint);
                     return;
                 }
-                if (method == "GET" && tail.Length == 0)
+                if (method == "GET" && (tail.Length == 0 || tail == "/"))
                 {
-                    string loc = "/r/" + room + "/";
-                    string head = "HTTP/1.1 302 Found\r\nLocation: " + loc
-                        + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                    byte[] hb = System.Text.Encoding.ASCII.GetBytes(head);
-                    stream.Write(hb, 0, hb.Length);
-                }
-                else if (method == "GET" && tail == "/")
-                {
-                    byte[] page = System.Text.Encoding.UTF8.GetBytes(Page());
-                    WriteResponse(stream, 200, "OK", "text/html; charset=utf-8", page);
+                    byte[] note = System.Text.Encoding.UTF8.GetBytes("HvShare relay\r\n");
+                    WriteResponse(stream, 200, "OK", "text/plain; charset=utf-8", note);
                 }
                 else if (method == "GET" && tail == "/list")
                 {
@@ -531,50 +523,6 @@ namespace HvScreen
             return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
-        static string Page()
-        {
-            return "<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\"/>"
-                + "<title>HV 화면 모음</title><style>"
-                + "body{margin:0;background:#0e1116;color:#e7edf5;font:15px/1.4 Segoe UI,sans-serif}"
-                + "header{padding:22px 24px 8px}h1{margin:0 0 6px;font-size:22px}"
-                + "p{margin:0;color:#93a0b4}"
-                + "#wall{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;padding:16px 24px 32px}"
-                + ".card{background:#171b22;border:1px solid #2a3140;border-radius:14px;overflow:hidden}"
-                + ".card header{padding:10px 12px 0}img{width:100%;background:#000;display:block}"
-                + "#empty{color:#93a0b4;padding:48px 24px}"
-                + "</style></head><body><header><h1>실행 중인 화면</h1>"
-                + "<p id=\"lead\">화면 보내기가 켜진 PC가 여기 모두 표시됩니다.</p></header>"
-                + "<div id=\"empty\">아직 실행 중인 화면이 없습니다.</div><div id=\"wall\"></div>"
-                + "<script>"
-                + "const wall=document.getElementById('wall');"
-                + "const empty=document.getElementById('empty');"
-                + "const cards={};"
-                + "async function tick(){"
-                + "let list=[];"
-                + "try{list=await (await fetch('list',{cache:'no-store'})).json();}catch(e){return;}"
-                + "const seen={};"
-                + "empty.hidden=list.length>0;"
-                + "for(const item of list){"
-                + "seen[item.id]=true;"
-                + "let card=cards[item.id];"
-                + "if(!card){"
-                + "card=document.createElement('section');"
-                + "card.className='card';"
-                + "card.innerHTML='<header></header><img alt=\"\">';"
-                + "wall.appendChild(card);"
-                + "cards[item.id]=card;"
-                + "}"
-                + "card.querySelector('header').textContent=item.name;"
-                + "card.querySelector('img').src='frame/'+encodeURIComponent(item.id)+'?t='+Date.now();"
-                + "}"
-                + "Object.keys(cards).forEach(function(id){"
-                + "if(!seen[id]){cards[id].remove();delete cards[id];}"
-                + "});"
-                + "}"
-                + "tick();setInterval(tick,400);"
-                + "</script></body></html>";
-        }
-
         static string ReadHeader(NetworkStream stream)
         {
             MemoryStream ms = new MemoryStream();
@@ -685,7 +633,7 @@ namespace HvScreen
             ClientSize = new Size(520, 220);
             Font = new Font("Segoe UI", 10f);
 
-            Controls.Add(Ui.Mute("이 PC에서 중계를 엽니다. 도메인이 이 PC를 가리키고 19723 포트가 열려 있어야 합니다.", 24, 16, 472, 44));
+            Controls.Add(Ui.Mute("화면을 받아 두는 서버입니다. 신버전 HvShare가 넣고, HvShareView가 봅니다.", 24, 16, 472, 44));
 
             _status = new Label();
             _status.ForeColor = Theme.Text;
@@ -708,7 +656,7 @@ namespace HvScreen
                 _status.Text = "중계 서버를 열지 못했습니다. " + ex.Message;
                 return;
             }
-            _status.Text = "감시 주소\r\n" + Program.MonitorUrl + "/";
+            _status.Text = "서버 여는 중\r\n" + Program.MonitorUrl;
         }
     }
 
@@ -718,7 +666,7 @@ namespace HvScreen
 
         public RelayViewForm()
         {
-            Text = "HV 화면 보기";
+            Text = "HV 화면 보기 (구버전)";
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -737,16 +685,7 @@ namespace HvScreen
 
         void OpenPage()
         {
-            string page = Program.MonitorUrl + "/";
-            _status.Text = "브라우저에서 보는 중입니다.\r\n" + page;
-            try
-            {
-                System.Diagnostics.Process.Start(page);
-            }
-            catch (Exception ex)
-            {
-                _status.Text = "브라우저를 열지 못했습니다. " + ex.Message;
-            }
+            _status.Text = "구버전 브라우저 보기는 쓰지 않습니다.\r\n화면은 신버전 HvShareView에서 봅니다.";
         }
     }
 
@@ -765,7 +704,7 @@ namespace HvScreen
             _senderId = HubServer.CleanToken(_senderName) + "-" + new Random().Next(0x1000, 0xFFFF).ToString("X");
             if (_senderId.StartsWith("-"))
                 _senderId = "pc" + _senderId;
-            Text = "HV 화면 보내기";
+            Text = "HV 화면 보내기 (구버전)";
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -774,7 +713,7 @@ namespace HvScreen
             ClientSize = new Size(520, 180);
             Font = new Font("Segoe UI", 10f);
 
-            Controls.Add(Ui.Mute("이 PC 화면을 감시 주소로 보냅니다. 창을 켜 두면 바로 보입니다.", 24, 16, 472, 36));
+            Controls.Add(Ui.Mute("구버전입니다. 드라이버 없이 이 PC 화면을 중계 서버로 보냅니다.", 24, 16, 472, 36));
             Label addr = new Label();
             addr.Text = Program.MonitorUrl + "/";
             addr.ForeColor = Theme.Text;
