@@ -361,8 +361,8 @@ namespace HvScreen
                 string tail;
                 if (!SplitRoom(path, out room, out tail))
                 {
-                    byte[] hint = System.Text.Encoding.UTF8.GetBytes("방 주소는 /r/방이름/ 입니다.");
-                    WriteResponse(stream, 404, "Not Found", "text/plain; charset=utf-8", hint);
+                    byte[] hint = System.Text.Encoding.UTF8.GetBytes("missing");
+                    WriteResponse(stream, 404, "Not Found", "text/plain", hint);
                     return;
                 }
                 if (method == "GET" && tail.Length == 0)
@@ -422,9 +422,16 @@ namespace HvScreen
 
         static bool SplitRoom(string path, out string room, out string tail)
         {
-            room = "";
+            room = "live";
             tail = "";
-            if (path == null || !path.StartsWith("/r/"))
+            if (path == null)
+                return false;
+            if (path == "/" || path == "/list" || path == "/frame" || path.StartsWith("/frame/"))
+            {
+                tail = path;
+                return true;
+            }
+            if (!path.StartsWith("/r/"))
                 return false;
             string rest = path.Substring(3);
             int slash = rest.IndexOf('/');
@@ -664,9 +671,7 @@ namespace HvScreen
     sealed class HubForm : Form
     {
         readonly HubServer _hub = new HubServer();
-        readonly TextBox _roomBox;
         readonly Label _status;
-        bool _saving;
 
         public HubForm()
         {
@@ -676,44 +681,23 @@ namespace HvScreen
             MaximizeBox = false;
             BackColor = Theme.Bg;
             ForeColor = Theme.Text;
-            ClientSize = new Size(520, 340);
+            ClientSize = new Size(520, 220);
             Font = new Font("Segoe UI", 10f);
 
-            Controls.Add(Ui.Mute("감시 주소는 monitor.rjsgud.com 으로 고정입니다. 이 PC가 그 도메인이어야 하고, 19723 포트가 열려 있어야 합니다.", 24, 16, 472, 44));
-            Controls.Add(Ui.Mute("방 이름", 24, 68, 472, 20));
-            _roomBox = Ui.Box(RelaySettings.Room, 24, 90, 472);
-            _roomBox.Leave += delegate { SaveRoom(); };
-            Controls.Add(_roomBox);
+            Controls.Add(Ui.Mute("이 PC에서 중계를 엽니다. 도메인이 이 PC를 가리키고 19723 포트가 열려 있어야 합니다.", 24, 16, 472, 44));
 
             _status = new Label();
             _status.ForeColor = Theme.Text;
-            _status.Bounds = new Rectangle(24, 132, 472, 180);
+            _status.Bounds = new Rectangle(24, 72, 472, 120);
             _status.Text = "여는 중";
             Controls.Add(_status);
 
             Shown += delegate { OpenHub(); };
-            FormClosing += delegate
-            {
-                SaveRoom();
-                _hub.Stop();
-            };
-        }
-
-        void SaveRoom()
-        {
-            if (_saving || _roomBox == null)
-                return;
-            _saving = true;
-            RelaySettings.Room = _roomBox.Text;
-            RelaySettings.Save();
-            if (_roomBox.Text != RelaySettings.Room)
-                _roomBox.Text = RelaySettings.Room;
-            _saving = false;
+            FormClosing += delegate { _hub.Stop(); };
         }
 
         void OpenHub()
         {
-            SaveRoom();
             try
             {
                 _hub.Start();
@@ -723,13 +707,12 @@ namespace HvScreen
                 _status.Text = "중계 서버를 열지 못했습니다. " + ex.Message;
                 return;
             }
-            _status.Text = "감시 주소\r\n" + Program.MonitorUrl;
+            _status.Text = "감시 주소\r\n" + Program.MonitorUrl + "/";
         }
     }
 
     sealed class RelayViewForm : Form
     {
-        readonly TextBox _roomBox;
         readonly Label _status;
 
         public RelayViewForm()
@@ -740,55 +723,20 @@ namespace HvScreen
             MaximizeBox = false;
             BackColor = Theme.Bg;
             ForeColor = Theme.Text;
-            ClientSize = new Size(520, 280);
+            ClientSize = new Size(520, 160);
             Font = new Font("Segoe UI", 10f);
 
-            Controls.Add(Ui.Mute("감시 주소", 24, 16, 472, 20));
-            Label addr = new Label();
-            addr.Text = Program.MonitorUrl;
-            addr.ForeColor = Theme.Text;
-            addr.Bounds = new Rectangle(24, 38, 472, 28);
-            Controls.Add(addr);
-            Controls.Add(Ui.Mute("방 이름", 24, 76, 472, 20));
-            _roomBox = Ui.Box(RelaySettings.Room, 24, 98, 472);
-            Controls.Add(_roomBox);
-
-            Button open = new Button();
-            open.Text = "화면 열기";
-            open.Bounds = new Rectangle(24, 146, 472, 42);
-            open.FlatStyle = FlatStyle.Flat;
-            open.BackColor = Theme.Accent;
-            open.ForeColor = Color.White;
-            open.FlatAppearance.BorderSize = 0;
-            open.Click += delegate { OpenPage(); };
-            Controls.Add(open);
-
             _status = new Label();
-            _status.ForeColor = Theme.Muted;
-            _status.Bounds = new Rectangle(24, 200, 472, 64);
-            _status.Text = "방 이름을 중계 서버와 같게 맞추세요.";
+            _status.ForeColor = Theme.Text;
+            _status.Bounds = new Rectangle(24, 24, 472, 110);
+            _status.Text = "여는 중";
             Controls.Add(_status);
             Shown += delegate { OpenPage(); };
-            FormClosing += delegate { Remember(); };
-        }
-
-        void Remember()
-        {
-            RelaySettings.Room = _roomBox.Text;
-            RelaySettings.Save();
-            _roomBox.Text = RelaySettings.Room;
         }
 
         void OpenPage()
         {
-            Remember();
-            string room = RelaySettings.Room;
-            if (room.Length < 4)
-            {
-                _status.Text = "방 이름은 4자 이상으로 입력하세요.";
-                return;
-            }
-            string page = RelaySettings.RoomPage(Program.MonitorUrl, room);
+            string page = Program.MonitorUrl + "/";
             _status.Text = "브라우저에서 보는 중입니다.\r\n" + page;
             try
             {
@@ -804,13 +752,10 @@ namespace HvScreen
     sealed class ShareForm : Form
     {
         readonly Label _status;
-        readonly TextBox _roomBox;
         volatile bool _running = true;
         Thread _captureThread;
         readonly string _senderId;
         readonly string _senderName;
-        string _relayUrl;
-        string _room;
         bool _hubPosted;
 
         public ShareForm()
@@ -825,34 +770,20 @@ namespace HvScreen
             MaximizeBox = false;
             BackColor = Theme.Bg;
             ForeColor = Theme.Text;
-            ClientSize = new Size(520, 300);
+            ClientSize = new Size(520, 180);
             Font = new Font("Segoe UI", 10f);
 
-            Controls.Add(Ui.Mute("이 PC 화면을 감시 주소로 보냅니다. 창을 켜 두면 보는 쪽에 나타납니다.", 24, 16, 472, 36));
-            Controls.Add(Ui.Mute("감시 주소", 24, 56, 472, 20));
+            Controls.Add(Ui.Mute("이 PC 화면을 감시 주소로 보냅니다. 창을 켜 두면 바로 보입니다.", 24, 16, 472, 36));
             Label addr = new Label();
-            addr.Text = Program.MonitorUrl;
+            addr.Text = Program.MonitorUrl + "/";
             addr.ForeColor = Theme.Text;
-            addr.Bounds = new Rectangle(24, 76, 472, 28);
+            addr.Bounds = new Rectangle(24, 60, 472, 28);
             Controls.Add(addr);
-            Controls.Add(Ui.Mute("방 이름", 24, 110, 472, 20));
-            _roomBox = Ui.Box(RelaySettings.Room, 24, 132, 472);
-            Controls.Add(_roomBox);
-
-            Button send = new Button();
-            send.Text = "보내기";
-            send.Bounds = new Rectangle(24, 176, 472, 42);
-            send.FlatStyle = FlatStyle.Flat;
-            send.BackColor = Theme.Accent;
-            send.ForeColor = Color.White;
-            send.FlatAppearance.BorderSize = 0;
-            send.Click += delegate { StartShare(); };
-            Controls.Add(send);
 
             _status = new Label();
-            _status.Text = "방 이름을 중계 서버와 같게 맞추세요.";
+            _status.Text = "연결하는 중";
             _status.ForeColor = Theme.Muted;
-            _status.Bounds = new Rectangle(24, 230, 472, 52);
+            _status.Bounds = new Rectangle(24, 100, 472, 56);
             Controls.Add(_status);
 
             Shown += delegate { StartShare(); };
@@ -873,26 +804,13 @@ namespace HvScreen
 
         void StartShare()
         {
-            RelaySettings.Room = _roomBox.Text;
-            RelaySettings.Save();
-            _roomBox.Text = RelaySettings.Room;
-            _relayUrl = Program.MonitorUrl;
-            _room = RelaySettings.Room;
-            _hubPosted = false;
-
-            if (_room.Length < 4)
-            {
-                SetStatus("방 이름은 4자 이상으로 입력하세요.");
-                return;
-            }
-
             if (_captureThread == null)
             {
                 _captureThread = new Thread(CaptureLoop);
                 _captureThread.IsBackground = true;
                 _captureThread.Start();
             }
-            SetStatus("중계 서버에 연결하는 중");
+            SetStatus("감시 주소로 보내는 중");
         }
 
         void StopShare()
@@ -902,11 +820,9 @@ namespace HvScreen
 
         void PostHub(byte[] jpeg)
         {
-            if (_relayUrl.Length == 0 || _room.Length < 4)
-                return;
             try
             {
-                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(_relayUrl + "/r/" + _room + "/frame");
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(Program.MonitorUrl + "/frame");
                 req.Method = "POST";
                 req.ContentType = "image/jpeg";
                 req.Headers.Add("X-Hv-Id", _senderId);
@@ -929,7 +845,7 @@ namespace HvScreen
             catch (Exception)
             {
                 _hubPosted = false;
-                SetStatus("중계 서버에 연결하지 못했습니다. 주소와 방 이름을 확인하세요.");
+                SetStatus("감시 주소에 연결하지 못했습니다. 중계 서버가 켜져 있는지 확인하세요.");
             }
         }
 

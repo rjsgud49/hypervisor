@@ -71,6 +71,8 @@ def clean_token(raw):
 
 
 def split_room(path):
+    if path in ("/", "/list", "/frame") or path.startswith("/frame/"):
+        return "live", path
     if not path.startswith("/r/"):
         return None
     rest = path[3:]
@@ -129,7 +131,7 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         parsed = split_room(path)
         if parsed is None:
-            self._send(404, "text/plain; charset=utf-8", "방 주소는 /r/방이름/ 입니다.")
+            self._send(404, "text/plain; charset=utf-8", "missing")
             return None
         return parsed
 
