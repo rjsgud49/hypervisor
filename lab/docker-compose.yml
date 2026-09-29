@@ -1,0 +1,20 @@
+# Lab Mode: reversible Sub OS (NOT final Type-1 / H1-compliant)
+services:
+  sub-os:
+    build: ./sub
+    container_name: hv-lab-sub
+    hostname: hv-lab-sub
+    # Host loopback only — do not publish to LAN
+    ports:
+      - "127.0.0.1:19800:19800"
+    environment:
+      HVCHAN_PORT: "19800"
+      HVCHAN_MAGIC: "HVC1"
+    restart: "no"
+    # No privileged / no host pid — keep process namespaces separate (H3 lab)
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    labels:
+      joy.hypervisor.lab: "1"
+      joy.hypervisor.role: "sub"

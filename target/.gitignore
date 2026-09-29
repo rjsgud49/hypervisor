@@ -1,0 +1,7 @@
+# Ignore large local VM artifacts
+data/
+*.qcow2
+*.shm
+*.pid
+*.serial
+win/hv-relay.txt
