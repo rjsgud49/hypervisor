@@ -71,3 +71,20 @@ python3 target/channel/fb_view.py --shm target/data/hvchan.shm --pull auto
 브라우저: `http://127.0.0.1:19721/`
 
 Main 게스트 프레임버퍼를 직접 슬롯에 넣을 때는 게스트 안에서 `python3 fb_publish.py --source fb`, 뷰어는 `--pull watch`.
+
+---
+
+## Windows 화면
+
+Type-1 게스트 화면과 별개로, 이 PC(Windows) 바탕화면을 다루는 경로가 둘 있다.
+
+| 파일 | 역할 |
+|------|------|
+| `win/HvShare.exe` | 바탕화면을 JPEG로 `http://monitor.rjsgud.com:19723/frame`에 보낸다. 창 제목은 **HV 화면 보내기** |
+| `win/HvView.exe` | 감시 주소를 브라우저로 연다. 창 제목은 **HV 화면 보기** |
+| `win/hvshare/HvShare.sys` | 커널 드라이버. 바탕화면 프레임을 드라이버 메모리에 둔다 |
+| `win/hvshare/HvShareView.exe` | 관리자로 실행. 바탕화면을 드라이버에 넣고, 드라이버가 돌려준 프레임을 **HV 화면** 창에 그린다 |
+
+`HvShare.sys`는 프로세스 목록에 나오지 않는다. 서비스 이름은 `HvShare`, 종류는 `KERNEL_DRIVER`, 장치 경로는 `\\.\HvShare`다. 소스와 프로젝트는 `win/hvshare/driver`, `win/hvshare/include`, `win/hvshare/user`에 있다.
+
+픽셀은 사용자 모드 `CopyFromScreen`으로 들어오고, 프레임을 보관하는 주체는 드라이버다. 다른 게스트의 RAM을 열지 않고, GPU 스캔아웃을 긁지 않는다. 드라이버는 테스트 서명이며, 테스트 서명이 켜져 있어야 서비스가 시작된다.

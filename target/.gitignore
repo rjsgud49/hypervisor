@@ -5,3 +5,4 @@ data/
 *.pid
 *.serial
 win/hv-relay.txt
+win/hvshare/driver/obj/

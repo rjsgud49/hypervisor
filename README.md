@@ -93,7 +93,7 @@ Type-2(호스트에 QEMU 등)는 H1 위반 소지가 커서 **제약 검증용�
 | 문서 | 설명 |
 |------|------|
 | [docs/type1-real.md](docs/type1-real.md) | **실제 Type-1 설치·운영** |
-| [target/README.md](target/README.md) | KVM 호스트 스크립트·채널 |
+| [target/README.md](target/README.md) | KVM 호스트 스크립트·채널·Windows 화면 |
 | [docs/baseline.md](docs/baseline.md) | Phase 0 고정안 |
 | [docs/design.md](docs/design.md) | 시스템 설계 |
 | [docs/isolation.md](docs/isolation.md) | H1·H2·H3 |
