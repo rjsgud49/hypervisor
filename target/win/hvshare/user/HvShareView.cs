@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -80,17 +82,27 @@ namespace HvShareView
                 try
                 {
                     string listText = HttpText(HubUrl + "/list");
-                    HubPeer peer = Pick(ParseList(listText));
-                    if (peer == null)
+                    List<HubPeer> peers = ParseList(listText);
+                    if (peers.Count == 0)
                     {
-                        SetStatus("서버에 화면이 없습니다. 신버전 HvShare가 켜져 있어야 합니다.");
+                        SetStatus("서버에 화면이 없습니다. 이 PC에서 HvShare.exe /send 가 켜져 있어야 합니다.");
                         Thread.Sleep(400);
                         continue;
                     }
-                    byte[] jpeg = HttpBytes(HubUrl + "/frame/" + peer.Id);
-                    if (!ShowJpeg(jpeg, peer.Name))
+                    bool shown = false;
+                    peers.Sort(delegate(HubPeer a, HubPeer b) { return a.Age.CompareTo(b.Age); });
+                    for (int i = 0; i < peers.Count; i++)
                     {
-                        SetStatus(peer.Name + " 화면을 아직 받지 못했습니다.");
+                        byte[] jpeg = HttpBytes(HubUrl + "/frame/" + peers[i].Id);
+                        if (ShowFrame(jpeg, peers[i].Name))
+                        {
+                            shown = true;
+                            break;
+                        }
+                    }
+                    if (!shown)
+                    {
+                        SetStatus(peers[0].Name + " 화면을 아직 받지 못했습니다.");
                         Thread.Sleep(200);
                         continue;
                     }
@@ -101,17 +113,6 @@ namespace HvShareView
                 }
                 Thread.Sleep(100);
             }
-        }
-
-        static HubPeer Pick(List<HubPeer> peers)
-        {
-            HubPeer best = null;
-            for (int i = 0; i < peers.Count; i++)
-            {
-                if (best == null || peers[i].Age < best.Age)
-                    best = peers[i];
-            }
-            return best;
         }
 
         static List<HubPeer> ParseList(string json)
@@ -152,14 +153,11 @@ namespace HvShareView
             return peers;
         }
 
-        bool ShowJpeg(byte[] jpeg, string name)
+        bool ShowFrame(byte[] jpeg, string name)
         {
-            if (jpeg == null || jpeg.Length < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8)
+            Bitmap shown = DecodeFrame(jpeg);
+            if (shown == null)
                 return false;
-            Bitmap shown;
-            using (MemoryStream ms = new MemoryStream(jpeg))
-            using (Bitmap tmp = new Bitmap(ms))
-                shown = new Bitmap(tmp);
             lock (_gate)
             {
                 Bitmap old = _frame;
@@ -180,6 +178,40 @@ namespace HvShareView
             return true;
         }
 
+        static Bitmap DecodeFrame(byte[] body)
+        {
+            if (body == null || body.Length < 4)
+                return null;
+            if (body[0] == 0xFF && body[1] == 0xD8)
+            {
+                using (MemoryStream ms = new MemoryStream(body))
+                using (Bitmap tmp = new Bitmap(ms))
+                    return new Bitmap(tmp);
+            }
+            if (body[0] != (byte)'H' || body[1] != (byte)'V' || body[2] != (byte)'B' || body[3] != (byte)'G')
+                return null;
+            if (body.Length < 16)
+                return null;
+            int w = BitConverter.ToInt32(body, 4);
+            int h = BitConverter.ToInt32(body, 8);
+            int pitch = BitConverter.ToInt32(body, 12);
+            if (w <= 0 || h <= 0 || w > 4096 || h > 2400 || pitch != w * 4)
+                return null;
+            if (body.Length < 16 + pitch * h)
+                return null;
+            GCHandle pin = GCHandle.Alloc(body, GCHandleType.Pinned);
+            try
+            {
+                IntPtr bits = new IntPtr(pin.AddrOfPinnedObject().ToInt64() + 16);
+                using (Bitmap wrap = new Bitmap(w, h, pitch, PixelFormat.Format32bppArgb, bits))
+                    return new Bitmap(wrap);
+            }
+            finally
+            {
+                pin.Free();
+            }
+        }
+
         static string HttpText(string url)
         {
             byte[] body = HttpBytes(url);
@@ -192,8 +224,8 @@ namespace HvShareView
         {
             HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
             req.Method = "GET";
-            req.Timeout = 2500;
-            req.ReadWriteTimeout = 2500;
+            req.Timeout = 15000;
+            req.ReadWriteTimeout = 15000;
             using (WebResponse response = req.GetResponse())
             using (Stream stream = response.GetResponseStream())
             using (MemoryStream ms = new MemoryStream())

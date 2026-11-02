@@ -18,3 +18,4 @@ services:
     labels:
       joy.hypervisor.lab: "1"
       joy.hypervisor.role: "sub"
+  

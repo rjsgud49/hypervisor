@@ -13,11 +13,17 @@ namespace HvShare
     static class Program
     {
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
+            bool send = false;
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (string.Equals(args[i], "/send", StringComparison.OrdinalIgnoreCase))
+                    send = true;
+            }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new SenderForm());
+            Application.Run(new SenderForm(send));
         }
     }
 
@@ -39,6 +45,7 @@ namespace HvShare
         public const uint SourceText = 2;
         public const uint SourceLegacy = 3;
         public const uint SourceDesktop = 4;
+        public const uint SourceGfx = 5;
         public const uint FormatIndex8 = 1;
         public const uint FormatText = 2;
         public const uint FormatBgra32 = 3;
@@ -51,6 +58,7 @@ namespace HvShare
         public static readonly uint Query = Code(0x800, MethodBuffered, FileReadData);
         public static readonly uint Read = Code(0x801, MethodOutDirect, FileReadData);
         public static readonly uint Publish = Code(0x802, MethodInDirect, FileWriteData);
+        public static readonly uint Capture = Code(0x803, MethodBuffered, FileWriteData);
     }
 
     struct VgaInfo
@@ -97,7 +105,7 @@ namespace HvShare
         const uint ScManagerAllAccess = 0xF003F;
         const uint ServiceAllAccess = 0xF01FF;
         const uint ServiceKernelDriver = 1;
-        const uint ServiceDemandStart = 3;
+        const uint ServiceAutoStart = 2;
         const uint ServiceErrorNormal = 1;
         const uint ServiceNoChange = 0xFFFFFFFF;
         const uint ServiceControlStop = 1;
@@ -116,6 +124,24 @@ namespace HvShare
         public static IntPtr Invalid()
         {
             return new IntPtr(-1);
+        }
+
+        static void ConfigAuto(string bin)
+        {
+            try
+            {
+                System.Diagnostics.ProcessStartInfo info = new System.Diagnostics.ProcessStartInfo();
+                info.FileName = "sc.exe";
+                info.Arguments = "config HvShare start= auto binPath= " + bin;
+                info.CreateNoWindow = true;
+                info.UseShellExecute = false;
+                System.Diagnostics.Process proc = System.Diagnostics.Process.Start(info);
+                if (proc != null)
+                    proc.WaitForExit(4000);
+            }
+            catch (Exception)
+            {
+            }
         }
 
         public static string SysPath()
@@ -143,7 +169,7 @@ namespace HvShare
 
             string bin = SysPath();
             _service = CreateService(_scm, "HvShare", "HvShare", ServiceAllAccess,
-                ServiceKernelDriver, ServiceDemandStart, ServiceErrorNormal,
+                ServiceKernelDriver, ServiceAutoStart, ServiceErrorNormal,
                 bin, null, IntPtr.Zero, null, null, null);
             if (_service == IntPtr.Zero)
             {
@@ -152,8 +178,7 @@ namespace HvShare
                 {
                     _service = OpenService(_scm, "HvShare", ServiceAllAccess);
                     if (_service != IntPtr.Zero)
-                        ChangeServiceConfig(_service, ServiceNoChange, ServiceNoChange, ServiceNoChange,
-                            bin, null, IntPtr.Zero, null, null, null, null);
+                        ConfigAuto(bin);
                 }
                 else
                 {
@@ -172,13 +197,14 @@ namespace HvShare
                 return error;
             }
 
-            if (!StartService(_service, 0, IntPtr.Zero))
+            ServiceStatus current = new ServiceStatus();
+            bool already = QueryServiceStatus(_service, ref current) && current.CurrentState == 4;
+            if (!already && !StartService(_service, 0, IntPtr.Zero))
             {
                 int err = Marshal.GetLastWin32Error();
                 if (err == 123)
                 {
-                    ChangeServiceConfig(_service, ServiceNoChange, ServiceNoChange, ServiceNoChange,
-                        bin, null, IntPtr.Zero, null, null, null, null);
+                    ConfigAuto(bin);
                     if (StartService(_service, 0, IntPtr.Zero))
                         err = 0;
                     else
@@ -221,17 +247,6 @@ namespace HvShare
             {
                 CloseHandle(Handle);
                 Handle = Invalid();
-            }
-            if (_service != IntPtr.Zero && Started)
-            {
-                ServiceStatus status = new ServiceStatus();
-                ControlService(_service, ServiceControlStop, ref status);
-                Started = false;
-            }
-            if (_service != IntPtr.Zero && Created)
-            {
-                DeleteService(_service);
-                Created = false;
             }
             if (_service != IntPtr.Zero)
             {
@@ -317,6 +332,19 @@ namespace HvShare
             return true;
         }
 
+        public static bool Capture(out string error)
+        {
+            error = "";
+            byte[] unused = new byte[8];
+            uint got;
+            if (!DeviceIoControl(Handle, Ioctl.Capture, IntPtr.Zero, 0, unused, 0, out got, IntPtr.Zero))
+            {
+                error = "dxgkrnl/win32k 화면을 읽지 못했습니다. " + Win32();
+                return false;
+            }
+            return true;
+        }
+
         static string Win32()
         {
             return "코드 " + Marshal.GetLastWin32Error().ToString();
@@ -350,6 +378,9 @@ namespace HvShare
         static extern bool StartService(IntPtr service, uint argc, IntPtr argv);
 
         [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool QueryServiceStatus(IntPtr service, ref ServiceStatus status);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
         static extern bool ControlService(IntPtr service, uint control, ref ServiceStatus status);
 
         [DllImport("advapi32.dll", SetLastError = true)]
@@ -376,13 +407,16 @@ namespace HvShare
         readonly Label _status;
         readonly string _senderName;
         readonly string _senderId;
+        readonly bool _send;
         volatile bool _running;
         Thread _capture;
         bool _hubOk;
+        static System.Threading.Mutex _sendLock;
         const string HubUrl = "http://monitor.rjsgud.com:19723";
 
-        public SenderForm()
+        public SenderForm(bool send)
         {
+            _send = send;
             _senderName = Environment.MachineName;
             _senderId = CleanToken(_senderName);
             if (_senderId.Length == 0)
@@ -395,47 +429,193 @@ namespace HvShare
             MaximizeBox = false;
             BackColor = Color.FromArgb(14, 17, 22);
             ForeColor = Color.FromArgb(231, 237, 245);
-            ClientSize = new Size(560, 220);
+            ClientSize = new Size(560, 200);
             Font = new Font("Segoe UI", 10f);
+            ShowInTaskbar = !send;
 
             Label lead = new Label();
-            lead.Text = "HvShare.sys에 이 PC 화면을 넣고, 중계 서버로 보냅니다.\r\n화면은 HvShareView에서 봅니다.";
+            lead.Text = "실패";
             lead.ForeColor = Color.FromArgb(147, 160, 180);
             lead.Bounds = new Rectangle(24, 16, 512, 48);
             Controls.Add(lead);
 
             _status = new Label();
-            _status.Text = "드라이버를 등록하는 중";
+            _status.Text = "실패";
             _status.ForeColor = Color.FromArgb(231, 237, 245);
-            _status.Bounds = new Rectangle(24, 80, 512, 110);
+            _status.Bounds = new Rectangle(24, 76, 512, 100);
             Controls.Add(_status);
 
-            Shown += delegate { StartSend(); };
             FormClosing += delegate
             {
                 _running = false;
-                Driver.Close();
+                if (_send)
+                    Driver.Close();
             };
+            if (_send)
+                StartSend();
+            else
+            {
+                Shown += delegate
+                {
+                    Thread worker = new Thread(Install);
+                    worker.IsBackground = true;
+                    worker.Start();
+                };
+            }
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            base.SetVisibleCore(_send ? false : value);
+        }
+
+        void Install()
+        {
+            PrepareDriverTrust();
+            string bin = Driver.SysPath();
+            RunQuiet("sc.exe", "create HvShare type= kernel start= auto binPath= " + bin);
+            RunQuiet("sc.exe", "config HvShare start= auto binPath= " + bin);
+            RunQuiet("sc.exe", "start HvShare");
+            RunQuiet("schtasks.exe", "/Delete /F /TN HvShareSend");
+            SetStatus("실패");
+            Thread.Sleep(200);
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate { Close(); });
+            }
+            catch (Exception)
+            {
+            }
         }
 
         void StartSend()
         {
+            bool created;
+            _sendLock = new System.Threading.Mutex(true, @"Local\HvShareSend", out created);
+            if (!created)
+            {
+                Environment.Exit(0);
+                return;
+            }
             string error;
             Driver.Open(out error);
             if (error.Length != 0)
             {
-                _status.Text = error;
-                return;
+                PrepareDriverTrust();
+                Driver.Close();
+                Driver.Open(out error);
             }
             _running = true;
-            _capture = new Thread(SendLoop);
+            if (error.Length != 0)
+                _capture = new Thread(DirectSendLoop);
+            else
+                _capture = new Thread(SendLoop);
             _capture.IsBackground = true;
             _capture.Start();
+        }
+
+        static void PrepareDriverTrust()
+        {
+            string cer = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "HvShare.cer");
+            if (File.Exists(cer))
+            {
+                RunQuiet("certutil.exe", "-addstore -f Root \"" + cer + "\"");
+                RunQuiet("certutil.exe", "-addstore -f TrustedPublisher \"" + cer + "\"");
+            }
+            RunQuiet("bcdedit.exe", "/set testsigning on");
+        }
+
+        static bool ServiceRunning()
+        {
+            try
+            {
+                System.Diagnostics.ProcessStartInfo info = new System.Diagnostics.ProcessStartInfo();
+                info.FileName = "sc.exe";
+                info.Arguments = "query HvShare";
+                info.CreateNoWindow = true;
+                info.UseShellExecute = false;
+                info.RedirectStandardOutput = true;
+                System.Diagnostics.Process proc = System.Diagnostics.Process.Start(info);
+                if (proc == null)
+                    return false;
+                string text = proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit(2000);
+                return text.IndexOf("RUNNING") >= 0;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        static int RunQuiet(string file, string args)
+        {
+            try
+            {
+                System.Diagnostics.ProcessStartInfo info = new System.Diagnostics.ProcessStartInfo();
+                info.FileName = file;
+                info.Arguments = args;
+                info.CreateNoWindow = true;
+                info.UseShellExecute = false;
+                System.Diagnostics.Process proc = System.Diagnostics.Process.Start(info);
+                if (proc == null)
+                    return -1;
+                DateTime start = DateTime.UtcNow;
+                while (!proc.HasExited && (DateTime.UtcNow - start).TotalMilliseconds < 4000)
+                    Thread.Sleep(100);
+                if (!proc.HasExited)
+                {
+                    try
+                    {
+                        proc.Kill();
+                    }
+                    catch (Exception)
+                    {
+                    }
+                    return -1;
+                }
+                return proc.ExitCode;
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
+        }
+
+        void DirectSendLoop()
+        {
+            int frames = 0;
+            while (_running)
+            {
+                string error;
+                Bitmap shot = CaptureDesktop(out error);
+                if (!_running)
+                {
+                    if (shot != null)
+                        shot.Dispose();
+                    break;
+                }
+                if (shot == null)
+                {
+                    SetStatus(error);
+                    Thread.Sleep(200);
+                    continue;
+                }
+                byte[] jpeg = EncodeBitmap(shot);
+                shot.Dispose();
+                if (jpeg != null)
+                    PostHub(jpeg);
+                frames++;
+                string link = _hubOk ? "서버로 보내는 중" : "서버 연결 대기";
+                SetStatus("드라이버는 재부팅 뒤에 올라갑니다.\r\n" + link + "   프레임 " + frames.ToString() + "\r\n" + HubUrl);
+                Thread.Sleep(100);
+            }
         }
 
         void SendLoop()
         {
             int frames = 0;
+            EnsureGuiThread();
             while (_running && Driver.Handle != Driver.Invalid())
             {
                 string error;
@@ -461,9 +641,9 @@ namespace HvShare
                     continue;
                 }
                 VgaInfo info;
-                if (!Driver.Query(out info, out error) || info.Source != Ioctl.SourceDesktop)
+                if (!Driver.Query(out info, out error) || (info.Source != Ioctl.SourceDesktop && info.Source != Ioctl.SourceGfx))
                 {
-                    SetStatus(error.Length != 0 ? error : "드라이버가 바탕화면 프레임을 들고 있지 않습니다.");
+                    SetStatus(error.Length != 0 ? error : "드라이버가 화면 프레임을 들고 있지 않습니다.");
                     Thread.Sleep(200);
                     continue;
                 }
@@ -479,12 +659,25 @@ namespace HvShare
                     PostHub(jpeg);
                 frames++;
                 string link = _hubOk ? "서버로 보내는 중" : "서버 연결 대기";
-                SetStatus("드라이버 프레임 " + info.Width.ToString() + "×" + info.Height.ToString()
+                SetStatus("합성 화면 " + info.Width.ToString() + "×" + info.Height.ToString()
                     + "\r\n" + link + "   프레임 " + frames.ToString()
                     + "\r\n" + HubUrl);
                 Thread.Sleep(100);
             }
         }
+
+        static void EnsureGuiThread()
+        {
+            IntPtr dc = GetDC(IntPtr.Zero);
+            if (dc != IntPtr.Zero)
+                ReleaseDC(IntPtr.Zero, dc);
+        }
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetDC(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
 
         void PostHub(byte[] jpeg)
         {
@@ -578,6 +771,60 @@ namespace HvShare
             finally
             {
                 bmp.Dispose();
+            }
+        }
+
+        static byte[] EncodeBitmap(Bitmap source)
+        {
+            Bitmap frame = source;
+            Bitmap scaled = null;
+            try
+            {
+                if (source.Width > 1920)
+                {
+                    int height = Math.Max(1, source.Height * 1920 / source.Width);
+                    scaled = new Bitmap(1920, height, PixelFormat.Format24bppRgb);
+                    using (Graphics g = Graphics.FromImage(scaled))
+                        g.DrawImage(source, 0, 0, 1920, height);
+                    frame = scaled;
+                }
+                return SaveJpeg(frame);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+            finally
+            {
+                if (scaled != null)
+                    scaled.Dispose();
+            }
+        }
+
+        static byte[] SaveJpeg(Image frame)
+        {
+            ImageCodecInfo codec = null;
+            ImageCodecInfo[] codecs = ImageCodecInfo.GetImageEncoders();
+            for (int i = 0; i < codecs.Length; i++)
+            {
+                if (codecs[i].MimeType == "image/jpeg")
+                {
+                    codec = codecs[i];
+                    break;
+                }
+            }
+            if (codec == null)
+                return null;
+            using (EncoderParameters ep = new EncoderParameters(1))
+            {
+                ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 80L);
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    frame.Save(ms, codec, ep);
+                    if (ms.Length <= 0 || ms.Length > 8 * 1024 * 1024)
+                        return null;
+                    return ms.ToArray();
+                }
             }
         }
 

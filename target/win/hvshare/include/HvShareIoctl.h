@@ -1,7 +1,8 @@
 #pragma once
 
 /* Include after ntddk.h (kernel) or Windows.h (user).
-   The desktop frame lives in driver memory. VGA windows remain optional. */
+   The desktop frame lives in driver memory. The capture IOCTL asks dxgkrnl
+   for the display mode and win32k for a linear copy of the screen DC. */
 
 #define HVSHARE_VERSION 1u
 #define HVSHARE_MAX_PAYLOAD (32u * 1024u * 1024u)
@@ -12,6 +13,7 @@
 #define HVSHARE_SOURCE_TEXT 2u
 #define HVSHARE_SOURCE_LEGACY 3u
 #define HVSHARE_SOURCE_DESKTOP 4u
+#define HVSHARE_SOURCE_GFX 5u
 
 #define HVSHARE_FORMAT_INDEX8 1u
 #define HVSHARE_FORMAT_TEXT 2u
@@ -20,6 +22,7 @@
 #define IOCTL_HVSHARE_QUERY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_READ_DATA)
 #define IOCTL_HVSHARE_READ CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_OUT_DIRECT, FILE_READ_DATA)
 #define IOCTL_HVSHARE_PUBLISH CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_IN_DIRECT, FILE_WRITE_DATA)
+#define IOCTL_HVSHARE_CAPTURE CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_WRITE_DATA)
 
 #pragma pack(push, 1)
 typedef struct _HVSHARE_INFO {

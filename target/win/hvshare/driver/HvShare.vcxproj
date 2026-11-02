@@ -40,6 +40,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="HvShare.c" />
+    <ClCompile Include="HvShareNet.c" />
+    <ClCompile Include="HvShareGfx.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\include\HvShareIoctl.h" />

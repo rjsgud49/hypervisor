@@ -10,6 +10,7 @@ C_ASSERT(sizeof(HVSHARE_PUBLISH) == 16);
 C_ASSERT(IOCTL_HVSHARE_QUERY == 0x00226000);
 C_ASSERT(IOCTL_HVSHARE_READ == 0x00226006);
 C_ASSERT(IOCTL_HVSHARE_PUBLISH == 0x0022A009);
+C_ASSERT(IOCTL_HVSHARE_CAPTURE == 0x0022A00C);
 
 #define HV_VGA_PHYS 0xA0000ULL
 #define HV_VGA_BYTES 0x20000u
@@ -68,6 +69,13 @@ static PVOID g_Desktop;
 static ULONG g_DesktopBytes;
 static BOOLEAN g_HaveDesktop;
 #define HVSHARE_DESKTOP_TAG 'fSvH'
+
+void HvNetSignal(void);
+NTSTATUS HvNetStart(void);
+void HvNetStop(void);
+PVOID HvShareSnapshot(ULONG *outBytes);
+void HvShareSnapshotFree(PVOID buffer);
+NTSTATUS HvGfxCapture(PVOID *outBits, ULONG *outWidth, ULONG *outHeight);
 
 NTSYSAPI
 ULONG
@@ -503,7 +511,118 @@ static NTSTATUS StoreDesktop(PVOID input, ULONG inputBytes)
     g_Info.Height = hdr.Height;
     g_Info.Pitch = hdr.Width * 4u;
     g_Info.Payload = payload;
+    HvNetSignal();
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS AdoptBgra(PVOID bits, ULONG width, ULONG height)
+{
+    ULONG payload;
+
+    if (bits == NULL || width == 0 || height == 0 || width > HVSHARE_MAX_W || height > HVSHARE_MAX_H)
+        return STATUS_INVALID_PARAMETER;
+    if (height > (HVSHARE_MAX_PAYLOAD / 4u) / width)
+        return STATUS_INVALID_PARAMETER;
+    payload = width * height * 4u;
+    if (!g_LockReady)
+        return STATUS_DEVICE_NOT_READY;
+
+    ExAcquireResourceExclusiveLite(&g_Lock, TRUE);
+    if (g_Desktop != NULL)
+        ExFreePoolWithTag(g_Desktop, HVSHARE_DESKTOP_TAG);
+    g_Desktop = bits;
+    g_DesktopBytes = payload;
+    g_HaveDesktop = TRUE;
+    RtlZeroMemory(&g_Info, sizeof(g_Info));
+    g_Info.Version = HVSHARE_VERSION;
+    g_Info.Source = HVSHARE_SOURCE_GFX;
+    g_Info.Format = HVSHARE_FORMAT_BGRA32;
+    g_Info.Width = width;
+    g_Info.Height = height;
+    g_Info.Pitch = width * 4u;
+    g_Info.Payload = payload;
+    ExReleaseResourceLite(&g_Lock);
+    HvNetSignal();
+    return STATUS_SUCCESS;
+}
+
+PVOID HvShareSnapshot(ULONG *outBytes)
+{
+    ULONG scale;
+    ULONG dw;
+    ULONG dh;
+    ULONG y;
+    ULONG x;
+    ULONG srcPitch;
+    ULONG64 pixBytes;
+    PUCHAR neu;
+    PUCHAR src;
+    PUCHAR dst;
+
+    if (outBytes != NULL)
+        *outBytes = 0;
+    if (!g_LockReady)
+        return NULL;
+
+    ExAcquireResourceSharedLite(&g_Lock, TRUE);
+    if (!g_HaveDesktop || g_Desktop == NULL || g_Info.Width == 0 || g_Info.Height == 0 || g_Info.Pitch < g_Info.Width * 4u) {
+        ExReleaseResourceLite(&g_Lock);
+        return NULL;
+    }
+
+    scale = 1;
+    for (;;) {
+        dw = g_Info.Width / scale;
+        dh = g_Info.Height / scale;
+        pixBytes = (ULONG64)dw * (ULONG64)dh * 4ull;
+        if (dw > 0 && dh > 0 && dw <= 960u && pixBytes + 16ull <= (8ull * 1024ull * 1024ull))
+            break;
+        scale++;
+        if (scale > 8u) {
+            ExReleaseResourceLite(&g_Lock);
+            return NULL;
+        }
+    }
+
+    neu = ExAllocatePool2(POOL_FLAG_NON_PAGED, (SIZE_T)(pixBytes + 16ull), HVSHARE_DESKTOP_TAG);
+    if (neu == NULL) {
+        ExReleaseResourceLite(&g_Lock);
+        return NULL;
+    }
+
+    neu[0] = 'H';
+    neu[1] = 'V';
+    neu[2] = 'B';
+    neu[3] = 'G';
+    RtlCopyMemory(neu + 4, &dw, sizeof(dw));
+    RtlCopyMemory(neu + 8, &dh, sizeof(dh));
+    x = dw * 4u;
+    RtlCopyMemory(neu + 12, &x, sizeof(x));
+
+    src = (PUCHAR)g_Desktop;
+    srcPitch = g_Info.Pitch;
+    dst = neu + 16;
+    for (y = 0; y < dh; y++) {
+        PUCHAR row = src + ((ULONG64)y * scale) * srcPitch;
+        PUCHAR out = dst + ((ULONG64)y * dw * 4u);
+        if (scale == 1) {
+            RtlCopyMemory(out, row, dw * 4u);
+        } else {
+            for (x = 0; x < dw; x++)
+                RtlCopyMemory(out + (x * 4u), row + ((ULONG64)x * scale * 4u), 4);
+        }
+    }
+    ExReleaseResourceLite(&g_Lock);
+
+    if (outBytes != NULL)
+        *outBytes = (ULONG)(pixBytes + 16ull);
+    return neu;
+}
+
+void HvShareSnapshotFree(PVOID buffer)
+{
+    if (buffer != NULL)
+        ExFreePoolWithTag(buffer, HVSHARE_DESKTOP_TAG);
 }
 
 static NTSTATUS HvUnsupported(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
@@ -537,6 +656,23 @@ static NTSTATUS HvDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP I
     stack = IoGetCurrentIrpStackLocation(Irp);
     outLen = stack->Parameters.DeviceIoControl.OutputBufferLength;
     inLen = stack->Parameters.DeviceIoControl.InputBufferLength;
+
+    if (stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_HVSHARE_CAPTURE) {
+        PVOID bits = NULL;
+        ULONG width = 0;
+        ULONG height = 0;
+
+        status = HvGfxCapture(&bits, &width, &height);
+        if (NT_SUCCESS(status)) {
+            status = AdoptBgra(bits, width, height);
+            if (!NT_SUCCESS(status))
+                ExFreePoolWithTag(bits, HVSHARE_DESKTOP_TAG);
+        }
+        Irp->IoStatus.Status = status;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return status;
+    }
 
     ExAcquireResourceExclusiveLite(&g_Lock, TRUE);
 
@@ -588,6 +724,7 @@ static VOID HvUnload(_In_ PDRIVER_OBJECT DriverObject)
     UNICODE_STRING link;
 
     UNREFERENCED_PARAMETER(DriverObject);
+    HvNetStop();
     if (g_LockReady)
         ExAcquireResourceExclusiveLite(&g_Lock, TRUE);
     UnmapLfb();
@@ -656,6 +793,11 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     }
     g_Device->Flags |= DO_DIRECT_IO;
+    status = HvNetStart();
+    if (!NT_SUCCESS(status)) {
+        HvUnload(DriverObject);
+        return status;
+    }
     g_Device->Flags &= ~DO_DEVICE_INITIALIZING;
     return STATUS_SUCCESS;
 }

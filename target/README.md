@@ -81,11 +81,11 @@ Main 게스트 프레임버퍼를 직접 슬롯에 넣을 때는 게스트 안�
 | 파일 | 구분 | 역할 |
 |------|------|------|
 | `win/HvRelay.exe` | 서버 | 19723 포트. 화면을 받아 둔다. 창 제목은 **HV 중계 서버** |
-| `win/hvshare/HvShare.exe` | 신버전 | `HvShare.sys`를 등록하고, 드라이버가 가진 프레임을 서버로 보낸다 |
+| `win/hvshare/HvShare.exe` | 신버전 | 한 번 실행하면 `HvShare.sys`와 테스트 서명을 맞추고 닫힌다. 드라이버는 다음 부팅부터 자동으로 올라간다 |
 | `win/hvshare/HvShareView.exe` | 신버전 | 서버에 올라온 화면을 창에 그린다. 웹 브라우저가 아니다 |
 | `win/HvShare.exe` | 구버전 | 드라이버 없이 이 PC 화면을 서버로 보낸다 |
 | `win/HvView.exe` | 구버전 | 브라우저로 보던 창. 지금은 신버전 `HvShareView`를 쓰라고 안내한다 |
 
 보는 순서는 서버 → 신버전 `HvShare` → 신버전 `HvShareView`다.
 
-`HvShare.sys`는 프로세스 목록에 나오지 않는다. 서비스 이름은 `HvShare`, 장치 경로는 `\\.\HvShare`다. 픽셀은 사용자 모드 `CopyFromScreen`으로 들어오고, 프레임을 보관하는 주체는 드라이버다. 서버로 나가는 것은 그 프레임을 사용자 모드에서 읽은 JPEG다. 다른 게스트의 RAM을 열지 않고, GPU 스캔아웃을 긁지 않는다. 드라이버는 테스트 서명이며, 테스트 서명이 켜져 있어야 신버전 `HvShare`가 서비스를 시작한다.
+`HvShare.sys`는 프로세스 목록에 나오지 않는다. 서비스 이름은 `HvShare`, 장치 경로는 `\\.\HvShare`다. 모니터에 보이는 그림은 DWM 합성 화면이라, 픽셀은 `gdi32` `BitBlt`(`SRCCOPY`)로 읽는다. 드라이버의 `NtGdiBitBlt`는 비어 있는 GDI 표면만 복사해서 검게 나온다. 읽은 프레임은 JPEG로 `monitor.rjsgud.com:19723`에 올린다. 드라이버가 올리던 원본 프레임은 원격 뷰어가 풀지 못해 까만 창이 되므로 올리지 않는다. `HvShare.exe /send`가 꺼지면 새 화면이 멈춘다. 다른 게스트의 RAM을 열지 않고, GPU 스캔아웃 표면을 직접 매핑하지 않는다. 드라이버는 테스트 서명이다. 보관 중인 프레임이 없으면 보낼 픽셀이 없다.
